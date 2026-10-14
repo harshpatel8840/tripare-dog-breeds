@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
   BreedsResponse,
   BreedsResponseSchema,
@@ -5,6 +6,7 @@ import {
   SingleBreedResponseSchema,
   GroupsResponseSchema,
   GroupDto,
+  GroupsResponse,
 } from '../../types/api';
 import { logger } from '../../utils/logger';
 
@@ -186,6 +188,15 @@ export class DogApiClient {
           throw err;
         }
 
+        if (err instanceof z.ZodError) {
+          throw new ApiClientError({
+            message: `Schema validation failed: ${err.message}`,
+            isNetworkError: false,
+            isTimeout: false,
+            cause: err,
+          });
+        }
+
         const isTimeoutError =
           timedOut || (err instanceof Error && err.name === 'AbortError' && timedOut);
         const isAbort =
@@ -254,16 +265,50 @@ export class DogApiClient {
   }
 
   /**
-   * Fetches all breed groups.
+   * Fetches all breed groups dynamically following pagination metadata and links.
    */
   public async fetchGroups(options: RequestOptions = {}): Promise<GroupDto[]> {
-    const endpoint = '/groups';
-    const response = await this.request(
-      endpoint,
-      (json) => GroupsResponseSchema.parse(json),
-      options,
-    );
-    return response.data;
+    let endpoint: string | null = '/groups';
+    const allGroups: GroupDto[] = [];
+    const seenGroupIds = new Set<string>();
+
+    while (endpoint) {
+      const response: GroupsResponse = await this.request(
+        endpoint,
+        (json) => GroupsResponseSchema.parse(json),
+        options,
+      );
+
+      for (const group of response.data) {
+        if (!seenGroupIds.has(group.id)) {
+          seenGroupIds.add(group.id);
+          allGroups.push(group);
+        }
+      }
+
+      // Check pagination links or metadata
+      const nextLink = response.links?.next;
+      const paginationMeta = response.meta?.pagination;
+
+      if (nextLink) {
+        try {
+          const nextUrl = new URL(nextLink, this.baseUrl);
+          endpoint = `${nextUrl.pathname}${nextUrl.search}`.replace(/^\/api\/v2/, '');
+        } catch {
+          endpoint = nextLink.startsWith('/') ? nextLink : `/${nextLink}`;
+        }
+      } else if (
+        paginationMeta?.next &&
+        paginationMeta?.last &&
+        paginationMeta.next <= paginationMeta.last
+      ) {
+        endpoint = `/groups?page[number]=${paginationMeta.next}`;
+      } else {
+        endpoint = null;
+      }
+    }
+
+    return allGroups;
   }
 }
 

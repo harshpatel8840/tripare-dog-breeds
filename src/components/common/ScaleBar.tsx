@@ -23,7 +23,7 @@ export const ScaleBar: React.FC<ScaleBarProps> = ({
 }) => {
   const { colors } = useTheme();
 
-  const isProvided = value !== undefined && value !== null && !isNaN(value) && value > 0;
+  const isProvided = value !== undefined && value !== null && !isNaN(value) && value >= 0;
   const percentage = isProvided ? Math.min(100, Math.max(0, (value / maxScore) * 100)) : 0;
 
   const displayValue = isProvided

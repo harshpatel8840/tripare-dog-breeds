@@ -174,7 +174,96 @@ describe('SyncCoordinator', () => {
     const refreshed = await coordinator.refreshBreed('b1');
 
     expect(refreshed).toBe(true);
-    expect(mockApi.fetchBreedById).toHaveBeenCalledWith('b1');
+    expect(mockApi.fetchBreedById).toHaveBeenCalledWith('b1', {});
     expect(mockRepo.upsertBreeds).toHaveBeenCalledWith([expect.objectContaining({ id: 'b1' })]);
+  });
+
+  it('detects unexpected empty page and halts as partial without setting lastSuccessfulAt', async () => {
+    mockApi.fetchBreedsPage.mockImplementation((pageNum: number) => {
+      if (pageNum === 1) {
+        return Promise.resolve({
+          data: page1Breeds,
+          meta: { pagination: { current: 1, last: 3, records: 10 } },
+        });
+      }
+      // Unexpected empty data on page 2 before reaching last page 3
+      return Promise.resolve({
+        data: [],
+        meta: { pagination: { current: 2, last: 3, records: 10 } },
+      });
+    });
+
+    const result = await coordinator.syncAll();
+
+    expect(result.status).toBe('partial');
+    expect(mockRepo.updateSyncMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({
+        syncStatus: 'partial',
+        errorMessage: expect.stringContaining('Unexpected empty page'),
+      }),
+    );
+  });
+
+  it('marks sync as partial when final persisted count is less than expected count', async () => {
+    // API claims 10 records, but page 1 and 2 only return 3 total
+    mockApi.fetchBreedsPage.mockImplementation((pageNum: number) => {
+      if (pageNum === 1) {
+        return Promise.resolve({
+          data: page1Breeds,
+          meta: { pagination: { current: 1, last: 2, records: 10 } },
+        });
+      }
+      return Promise.resolve({
+        data: page2Breeds,
+        meta: { pagination: { current: 2, last: 2, records: 10 } },
+      });
+    });
+
+    const result = await coordinator.syncAll();
+
+    expect(result.status).toBe('partial');
+    expect(result.error).toContain('Incomplete sync');
+    // Ensure lastSuccessfulAt was NOT set
+    expect(mockRepo.updateSyncMetadata).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        syncStatus: 'success',
+      }),
+    );
+  });
+
+  it('skips auto-sync on initial subscriber notification and triggers auto-sync upon reconnect', async () => {
+    jest.useFakeTimers();
+    let networkCallback: ((connected: boolean) => void) | null = null;
+    mockNetwork.subscribe.mockImplementation((cb: (connected: boolean) => void) => {
+      networkCallback = cb;
+      // NetInfo.subscribe immediately emits current state
+      cb(true);
+      return jest.fn();
+    });
+
+    // Reconstruct coordinator with this subscription mock
+    const coord = new SyncCoordinator(
+      mockApi as unknown as DogApiClient,
+      mockRepo as unknown as BreedRepository,
+      mockNetwork as unknown as NetworkMonitor,
+    );
+    expect(coord.isSynchronizing()).toBe(false);
+
+    // Initial subscribe should NOT trigger auto-sync even after timeout
+    jest.advanceTimersByTime(2000);
+    expect(mockApi.fetchGroups).not.toHaveBeenCalled();
+
+    // Now simulate reconnect (offline -> online)
+    networkCallback!(false);
+    networkCallback!(true);
+
+    // Advance debounce timer (1500ms)
+    jest.advanceTimersByTime(1600);
+
+    // Wait for the async tick
+    await Promise.resolve();
+
+    expect(mockRepo.getSyncMetadata).toHaveBeenCalled();
+    jest.useRealTimers();
   });
 });

@@ -11,7 +11,7 @@ describe('useFilterStore', () => {
     expect(state.groupIds).toEqual([]);
     expect(state.sizeBands).toEqual([]);
     expect(state.coatLengths).toEqual([]);
-    expect(state.hypoallergenic).toBe('all');
+    expect(state.hypoallergenic).toEqual([]);
     expect(state.minChildrenScore).toBeNull();
     expect(state.hasActiveFilters()).toBe(false);
     expect(state.getActiveFilterCount()).toBe(0);
@@ -44,6 +44,22 @@ describe('useFilterStore', () => {
     expect(useFilterStore.getState().getActiveFilterCount()).toBe(2);
   });
 
+  it('toggles hypoallergenic as multi-select', () => {
+    const { toggleHypoallergenic } = useFilterStore.getState();
+    toggleHypoallergenic('yes');
+    expect(useFilterStore.getState().hypoallergenic).toEqual(['yes']);
+    expect(useFilterStore.getState().hasActiveFilters()).toBe(true);
+
+    // Can select both yes and no
+    toggleHypoallergenic('no');
+    expect(useFilterStore.getState().hypoallergenic).toEqual(['yes', 'no']);
+    expect(useFilterStore.getState().getActiveFilterCount()).toBe(2);
+
+    // Toggling yes again removes it
+    toggleHypoallergenic('yes');
+    expect(useFilterStore.getState().hypoallergenic).toEqual(['no']);
+  });
+
   it('updates trait threshold scores', () => {
     const { setMinChildrenScore, setMinDogsScore, setMinStrangersScore } =
       useFilterStore.getState();
@@ -63,7 +79,7 @@ describe('useFilterStore', () => {
     store.setSearchQuery('hound');
     store.toggleGroupId('group-1');
     store.toggleSizeBand('large');
-    store.setHypoallergenic('yes');
+    store.toggleHypoallergenic('yes');
     store.setMinChildrenScore(4);
 
     expect(useFilterStore.getState().hasActiveFilters()).toBe(true);
@@ -74,7 +90,7 @@ describe('useFilterStore', () => {
     expect(resetState.searchQuery).toBe('');
     expect(resetState.groupIds).toEqual([]);
     expect(resetState.sizeBands).toEqual([]);
-    expect(resetState.hypoallergenic).toBe('all');
+    expect(resetState.hypoallergenic).toEqual([]);
     expect(resetState.minChildrenScore).toBeNull();
     expect(resetState.hasActiveFilters()).toBe(false);
   });

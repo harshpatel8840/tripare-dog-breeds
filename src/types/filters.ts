@@ -1,13 +1,13 @@
 import { CoatLength, SizeBand } from './domain';
 
-export type HypoallergenicFilter = 'all' | 'yes' | 'no';
+export type HypoallergenicOption = 'yes' | 'no';
 
 export interface BreedFilters {
   searchQuery: string;
   groupIds: string[];
   sizeBands: SizeBand[];
   coatLengths: CoatLength[];
-  hypoallergenic: HypoallergenicFilter;
+  hypoallergenic: HypoallergenicOption[];
   minChildrenScore: number | null;
   minDogsScore: number | null;
   minStrangersScore: number | null;
@@ -18,7 +18,7 @@ export const INITIAL_FILTERS: BreedFilters = {
   groupIds: [],
   sizeBands: [],
   coatLengths: [],
-  hypoallergenic: 'all',
+  hypoallergenic: [],
   minChildrenScore: null,
   minDogsScore: null,
   minStrangersScore: null,
@@ -44,8 +44,7 @@ export const COAT_LENGTH_OPTIONS: FilterOption<CoatLength>[] = [
   { id: 'wire', label: 'Wire' },
 ];
 
-export const HYPOALLERGENIC_OPTIONS: FilterOption<HypoallergenicFilter>[] = [
-  { id: 'all', label: 'All' },
+export const HYPOALLERGENIC_OPTIONS: FilterOption<HypoallergenicOption>[] = [
   { id: 'yes', label: 'Yes' },
   { id: 'no', label: 'No' },
 ];

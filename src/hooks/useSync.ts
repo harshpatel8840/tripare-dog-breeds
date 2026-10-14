@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { syncCoordinator } from '../services/sync/syncCoordinator';
+import { syncCoordinator, SyncProgress } from '../services/sync/syncCoordinator';
 import { breedRepository } from '../services/repositories/breedRepository';
 import { SyncMetadata } from '../types/domain';
 import { logger } from '../utils/logger';
@@ -13,18 +13,17 @@ export function useSync() {
     persistedRecords: 0,
   });
   const [isSyncing, setIsSyncing] = useState<boolean>(syncCoordinator.isSynchronizing());
-  const [progress, setProgress] = useState<{
-    currentPage: number;
-    totalPages: number;
-    fetchedBreeds: number;
-    totalRecords?: number;
-  } | null>(null);
+  const [progress, setProgress] = useState<SyncProgress | null>(null);
 
   const loadMetadata = useCallback(async () => {
     try {
       const meta = await breedRepository.getSyncMetadata();
       setMetadata(meta);
-      setIsSyncing(meta.syncStatus === 'syncing' || syncCoordinator.isSynchronizing());
+      const isCurrentlySyncing = syncCoordinator.isSynchronizing();
+      setIsSyncing(isCurrentlySyncing);
+      if (!isCurrentlySyncing) {
+        setProgress(null);
+      }
     } catch (err) {
       logger.warn('[useSync] Failed to load metadata:', err);
     }
@@ -33,15 +32,20 @@ export function useSync() {
   useEffect(() => {
     loadMetadata();
 
-    const unsubProgress = syncCoordinator.subscribeProgress((p) => {
-      setProgress(p);
-      setIsSyncing(true);
+    const unsubState = syncCoordinator.subscribeSyncState((state) => {
+      setIsSyncing(state.isSyncing);
+      setProgress(state.progress);
+      if (!state.isSyncing) {
+        loadMetadata();
+        queryClient.invalidateQueries({ queryKey: ['breeds'] });
+        queryClient.invalidateQueries({ queryKey: ['groups'] });
+      }
     });
 
     return () => {
-      unsubProgress();
+      unsubState();
     };
-  }, [loadMetadata]);
+  }, [loadMetadata, queryClient]);
 
   const syncNow = useCallback(
     async (isBackground = false) => {

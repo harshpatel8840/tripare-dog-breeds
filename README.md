@@ -107,7 +107,7 @@ npm run web
 
 ## 🧪 Verification & Testing Suite
 
-The repository includes a comprehensive automated test suite with **64 passing tests across 9 test suites**, delivering **78.5%+ test coverage** across domain logic, repositories, sync coordinator, LRU eviction, and components.
+The repository includes a comprehensive automated test suite with **85 passing tests across 10 test suites**, delivering thorough coverage across domain logic, repositories, sync coordinator, LRU eviction, UI screens, and components.
 
 ```bash
 # Run all unit and integration tests
@@ -175,7 +175,7 @@ tripare-dog-breeds/
 │   ├── DECISIONS.md                  # 8 formal Architecture Decision Records
 │   └── PERFORMANCE.md                # Hermes bundle sizes & query benchmarks
 ├── src/
-│   ├── __tests__/                    # 9 Jest test suites (64 passing tests)
+│   ├── __tests__/                    # 10 Jest test suites (85 passing tests)
 │   ├── app/                          # Navigation container & provider stack
 │   ├── components/                   # Reusable atomic & composite components
 │   │   ├── breeds/                   # BreedListItem, SectionHeader, FilterChips

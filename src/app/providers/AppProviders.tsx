@@ -34,7 +34,6 @@ export const AppProviders: React.FC<Props> = ({ children }) => {
       try {
         // Step 1: Initialize database schema
         await databaseClient.initialize();
-        if (isMounted) setIsDbReady(true);
 
         // Step 2: Check cached breeds count & sync status
         const cachedCount = await breedRepository.getBreedCount();
@@ -42,6 +41,8 @@ export const AppProviders: React.FC<Props> = ({ children }) => {
         logger.info(
           `[AppProviders] DB ready. Cached breeds: ${cachedCount}. Sync status: ${meta.syncStatus}`,
         );
+
+        if (isMounted) setIsDbReady(true);
 
         // Step 3: Trigger background sync if empty or stale
         const isOnline = await networkMonitor.checkConnectivity();

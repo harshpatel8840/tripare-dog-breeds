@@ -6,6 +6,7 @@ import { useTheme } from '../../theme/useTheme';
 import { typography } from '../../theme/typography';
 import { borderRadius, spacing, layout } from '../../theme/spacing';
 import { Badge } from '../common/Badge';
+import { useCachedImage } from '../../hooks/useCachedImage';
 
 interface Props {
   item: BreedListItem;
@@ -15,6 +16,7 @@ interface Props {
 export const BreedListItemComponent: React.FC<Props> = memo(
   ({ item, onPress }) => {
     const { colors } = useTheme();
+    const { uri: imageUri } = useCachedImage(item.id, item.thumbUrl, 'thumb');
 
     const weightSummary =
       item.weightMin && item.weightMax
@@ -38,7 +40,7 @@ export const BreedListItemComponent: React.FC<Props> = memo(
       >
         <Image
           source={{
-            uri: item.thumbUrl || 'https://images.dogapi.dog/placeholder.jpg',
+            uri: imageUri || 'https://images.dogapi.dog/placeholder.jpg',
           }}
           style={[styles.thumbnail, { backgroundColor: colors.surfaceSubtle }]}
           contentFit="cover"

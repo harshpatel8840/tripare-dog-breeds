@@ -76,6 +76,8 @@ describe('DogApiClient', () => {
     globalThis.fetch = jest.fn().mockResolvedValue(mockFetchResponse);
 
     await expect(client.fetchBreedsPage(1, 48)).rejects.toThrow();
+    // Non-retryable: schema validation error should fail on first attempt
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry 404 client errors', async () => {
@@ -136,5 +138,37 @@ describe('DogApiClient', () => {
     await expect(client.fetchBreedsPage(1, 48, { signal: controller.signal })).rejects.toThrow(
       ApiClientError,
     );
+  });
+
+  it('fetches all groups dynamically following pagination links', async () => {
+    const page1Groups = {
+      data: [{ id: 'g1', type: 'group', attributes: { name: 'Hound' } }],
+      meta: { pagination: { current: 1, next: 2, last: 2, records: 2 } },
+      links: { next: `${mockBaseUrl}/groups?page[number]=2` },
+    };
+    const page2Groups = {
+      data: [{ id: 'g2', type: 'group', attributes: { name: 'Terrier' } }],
+      meta: { pagination: { current: 2, last: 2, records: 2 } },
+      links: { next: null },
+    };
+
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => page1Groups,
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => page2Groups,
+      } as unknown as Response);
+
+    const groups = await client.fetchGroups();
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(groups.length).toBe(2);
+    expect(groups.map((g) => g.attributes.name)).toEqual(['Hound', 'Terrier']);
   });
 });

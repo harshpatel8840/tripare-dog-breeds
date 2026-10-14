@@ -14,77 +14,77 @@ export const TraitScaleCard: React.FC<Props> = ({ traits }) => {
   const { colors } = useTheme();
 
   const getEnergyInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 2) return 'Calm';
     if (val === 3) return 'Moderate';
     return 'High Energy';
   };
 
   const getBarkingInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 2) return 'Quiet';
     if (val === 3) return 'Occasional';
     return 'Vocal';
   };
 
   const getDroolingInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 1) return 'Rare';
     if (val <= 3) return 'Moderate';
     return 'Frequent';
   };
 
   const getGroomingInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 2) return 'Low Maintenance';
     if (val === 3) return 'Moderate';
     return 'High Maintenance';
   };
 
   const getSheddingInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 1) return 'Minimal';
     if (val <= 3) return 'Moderate';
     return 'Heavy';
   };
 
   const getTrainabilityInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 2) return 'Independent';
     if (val === 3) return 'Moderate';
     return 'Eager to Please';
   };
 
   const getDogsInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 2) return 'Cautious';
     if (val === 3) return 'Friendly';
     return 'Highly Sociable';
   };
 
   const getExerciseInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 30) return 'Light Activity';
     if (val <= 60) return 'Moderate Activity';
     return 'Demanding Activity';
   };
 
   const getApartmentInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 2) return 'Not Ideal';
     if (val === 3) return 'Suitable';
     return 'Ideal';
   };
 
   const getChildrenInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 2) return 'Requires Supervision';
     if (val === 3) return 'Friendly';
     return 'Excellent Family Dog';
   };
 
   const getStrangersInterpretation = (val?: number) => {
-    if (!val) return undefined;
+    if (val == null) return undefined;
     if (val <= 2) return 'Reserved / Aloof';
     if (val === 3) return 'Polite';
     return 'Very Welcoming';

@@ -5,17 +5,28 @@ import { SyncStatus } from '../../types/domain';
 import { BreedDto } from '../../types/api';
 import { logger } from '../../utils/logger';
 
-export type SyncProgressListener = (progress: {
+export interface SyncProgress {
   currentPage: number;
   totalPages: number;
   fetchedBreeds: number;
   totalRecords?: number;
+}
+
+export type SyncProgressListener = (progress: SyncProgress) => void;
+
+export type SyncStateListener = (state: {
+  isSyncing: boolean;
+  status: SyncStatus;
+  progress: SyncProgress | null;
 }) => void;
 
 export class SyncCoordinator {
   private isSyncing = false;
+  private currentStatus: SyncStatus = 'idle';
+  private currentProgress: SyncProgress | null = null;
   private currentAbortController: AbortController | null = null;
   private progressListeners = new Set<SyncProgressListener>();
+  private stateListeners = new Set<SyncStateListener>();
 
   constructor(
     private api: DogApiClient = dogApiClient,
@@ -27,8 +38,14 @@ export class SyncCoordinator {
 
   private setupNetworkAutoSync(): void {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let isInitialConnection = true;
 
     this.network.subscribe((isConnected) => {
+      if (isInitialConnection) {
+        isInitialConnection = false;
+        return;
+      }
+
       if (isConnected) {
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(async () => {
@@ -53,6 +70,10 @@ export class SyncCoordinator {
             logger.warn('[SyncCoordinator] Auto-sync check error:', err);
           }
         }, 1500); // 1.5s debounce to avoid flurry of rapid reconnects
+
+        if (typeof (debounceTimer as unknown as { unref?: () => void }).unref === 'function') {
+          (debounceTimer as unknown as { unref: () => void }).unref();
+        }
       }
     });
   }
@@ -62,6 +83,38 @@ export class SyncCoordinator {
     return () => {
       this.progressListeners.delete(listener);
     };
+  }
+
+  public subscribeSyncState(listener: SyncStateListener): () => void {
+    this.stateListeners.add(listener);
+    // Immediately emit current state snapshot to new subscriber
+    try {
+      listener({
+        isSyncing: this.isSyncing,
+        status: this.currentStatus,
+        progress: this.currentProgress,
+      });
+    } catch (err) {
+      logger.warn('[SyncCoordinator] Initial state listener error:', err);
+    }
+    return () => {
+      this.stateListeners.delete(listener);
+    };
+  }
+
+  private emitState(): void {
+    const snapshot = {
+      isSyncing: this.isSyncing,
+      status: this.currentStatus,
+      progress: this.currentProgress,
+    };
+    this.stateListeners.forEach((fn) => {
+      try {
+        fn(snapshot);
+      } catch (err) {
+        logger.warn('[SyncCoordinator] State listener error:', err);
+      }
+    });
   }
 
   private emitProgress(
@@ -120,7 +173,10 @@ export class SyncCoordinator {
     }
 
     this.isSyncing = true;
+    this.currentStatus = 'syncing';
+    this.currentProgress = null;
     this.currentAbortController = new AbortController();
+    this.emitState();
     const startTime = Date.now();
 
     await this.repository.updateSyncMetadata({
@@ -158,7 +214,14 @@ export class SyncCoordinator {
       // Persist Page 1 immediately
       await this.repository.upsertBreeds(page1.data);
       totalPersistedSoFar = await this.repository.getBreedCount();
+      this.currentProgress = {
+        currentPage: 1,
+        totalPages: lastPage,
+        fetchedBreeds: page1.data.length,
+        totalRecords: totalExpectedRecords,
+      };
       this.emitProgress(1, lastPage, page1.data.length, totalExpectedRecords);
+      this.emitState();
 
       // Step 3: Fetch Remaining Pages Sequentially (to avoid flooding and ensure deterministic persistence)
       const seenIds = new Set<string>(page1.data.map((b) => b.id));
@@ -172,6 +235,10 @@ export class SyncCoordinator {
           const pageData = await this.api.fetchBreedsPage(pageNum, PAGE_SIZE, {
             signal: this.currentAbortController.signal,
           });
+
+          if (pageData.data.length === 0 && pageNum <= lastPage) {
+            throw new Error(`Unexpected empty page received on page ${pageNum} of ${lastPage}`);
+          }
 
           // Deduplicate
           const uniqueBreeds: BreedDto[] = [];
@@ -187,7 +254,14 @@ export class SyncCoordinator {
           }
 
           totalPersistedSoFar = await this.repository.getBreedCount();
+          this.currentProgress = {
+            currentPage: pageNum,
+            totalPages: lastPage,
+            fetchedBreeds: seenIds.size,
+            totalRecords: totalExpectedRecords,
+          };
           this.emitProgress(pageNum, lastPage, seenIds.size, totalExpectedRecords);
+          this.emitState();
         } catch (pageError: unknown) {
           const pageMsg = pageError instanceof Error ? pageError.message : 'Network error';
           logger.error(
@@ -195,6 +269,7 @@ export class SyncCoordinator {
             pageError,
           );
 
+          this.currentStatus = 'partial';
           await this.repository.updateSyncMetadata({
             syncStatus: 'partial',
             expectedRecords: totalExpectedRecords,
@@ -211,8 +286,31 @@ export class SyncCoordinator {
         }
       }
 
-      // Step 4: Complete Successful Sync
+      // Step 4: Complete Sync Verification (detect inconsistent totals / incomplete data)
       const finalCount = await this.repository.getBreedCount();
+      const isComplete =
+        totalExpectedRecords !== undefined ? finalCount >= totalExpectedRecords : true;
+
+      if (!isComplete) {
+        logger.warn(
+          `[SyncCoordinator] Incomplete sync: persisted ${finalCount} breeds but expected ${totalExpectedRecords}. Marking partial.`,
+        );
+        this.currentStatus = 'partial';
+        await this.repository.updateSyncMetadata({
+          syncStatus: 'partial',
+          expectedRecords: totalExpectedRecords,
+          persistedRecords: finalCount,
+          errorMessage: `Incomplete sync: retrieved ${finalCount} of ${totalExpectedRecords} records`,
+        });
+        return {
+          status: 'partial',
+          persistedCount: finalCount,
+          totalExpected: totalExpectedRecords,
+          error: `Incomplete sync: retrieved ${finalCount} of ${totalExpectedRecords} records`,
+        };
+      }
+
+      this.currentStatus = 'success';
       await this.repository.updateSyncMetadata({
         lastSuccessfulAt: Date.now(),
         syncStatus: 'success',
@@ -235,6 +333,7 @@ export class SyncCoordinator {
 
       const cachedCount = await this.repository.getBreedCount();
       const status: SyncStatus = cachedCount > 0 ? 'partial' : 'failed';
+      this.currentStatus = status;
 
       await this.repository.updateSyncMetadata({
         syncStatus: status,
@@ -251,23 +350,30 @@ export class SyncCoordinator {
       };
     } finally {
       this.isSyncing = false;
+      this.currentProgress = null;
       this.currentAbortController = null;
+      this.emitState();
     }
   }
 
   /**
    * Refreshes a single breed in the background without affecting other cached breeds.
    */
-  public async refreshBreed(breedId: string): Promise<boolean> {
+  public async refreshBreed(
+    breedId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<boolean> {
     const isConnected = await this.network.checkConnectivity();
     if (!isConnected) return false;
 
     try {
-      const breedDto = await this.api.fetchBreedById(breedId);
+      const breedDto = await this.api.fetchBreedById(breedId, options);
+      if (options.signal?.aborted) return false;
       await this.repository.upsertBreeds([breedDto]);
       logger.info(`[SyncCoordinator] Refreshed breed ${breedDto.attributes.name} (${breedId})`);
       return true;
     } catch (err) {
+      if (options.signal?.aborted) return false;
       logger.warn(`[SyncCoordinator] Failed to refresh breed ${breedId}:`, err);
       return false;
     }
@@ -277,8 +383,11 @@ export class SyncCoordinator {
     if (this.currentAbortController) {
       this.currentAbortController.abort();
       this.currentAbortController = null;
-      this.isSyncing = false;
     }
+    this.isSyncing = false;
+    this.currentStatus = 'idle';
+    this.currentProgress = null;
+    this.emitState();
   }
 }
 

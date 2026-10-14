@@ -15,6 +15,7 @@ import { typography } from '../../theme/typography';
 import { borderRadius, spacing, layout } from '../../theme/spacing';
 import { AttributionCard } from './AttributionCard';
 import { imageManager } from '../../services/images/imageManager';
+import { useCachedImage } from '../../hooks/useCachedImage';
 
 interface Props {
   images?: BreedImage[];
@@ -29,8 +30,20 @@ export const GalleryViewer: React.FC<Props> = ({ images = [], breedName }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Register currently displayed image with ImageManager so it won't be LRU evicted
   const currentImage = images[selectedIndex];
+  const mediumUri = currentImage?.mediumUrl || currentImage?.thumbUrl || currentImage?.url;
+  const largeUri = currentImage?.largeUrl || currentImage?.mediumUrl || currentImage?.url;
+
+  // Cache medium image for carousel preview
+  const { uri: cachedMediumUri } = useCachedImage(currentImage?.id, mediumUri, 'medium');
+  // Cache large full-resolution image on demand only when fullscreen modal is opened
+  const { uri: cachedLargeUri } = useCachedImage(
+    isFullscreen ? currentImage?.id : undefined,
+    isFullscreen ? largeUri : undefined,
+    'large',
+  );
+
+  // Register currently displayed image with ImageManager so it won't be LRU evicted
   useEffect(() => {
     if (currentImage?.id) {
       imageManager.registerActiveImage(currentImage.id);
@@ -57,9 +70,6 @@ export const GalleryViewer: React.FC<Props> = ({ images = [], breedName }) => {
     );
   }
 
-  const mediumUri = currentImage?.mediumUrl || currentImage?.thumbUrl || currentImage?.url;
-  const largeUri = currentImage?.largeUrl || currentImage?.mediumUrl || currentImage?.url;
-
   return (
     <View style={styles.container}>
       {/* Main Preview Card */}
@@ -71,7 +81,7 @@ export const GalleryViewer: React.FC<Props> = ({ images = [], breedName }) => {
         accessibilityLabel={`View full screen image ${selectedIndex + 1} of ${images.length} for ${breedName}`}
       >
         <Image
-          source={{ uri: mediumUri }}
+          source={{ uri: cachedMediumUri || mediumUri }}
           style={styles.mainImage}
           contentFit="cover"
           transition={300}
@@ -147,7 +157,7 @@ export const GalleryViewer: React.FC<Props> = ({ images = [], breedName }) => {
 
           <View style={styles.fullscreenImageContainer}>
             <Image
-              source={{ uri: largeUri }}
+              source={{ uri: cachedLargeUri || largeUri }}
               style={styles.fullscreenImage}
               contentFit="contain"
               transition={200}

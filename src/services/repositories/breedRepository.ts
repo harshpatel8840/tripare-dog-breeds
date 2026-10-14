@@ -14,11 +14,68 @@ import { BreedDto, GroupDto } from '../../types/api';
 import { BreedFilters } from '../../types/filters';
 import { BreedGroupRow, BreedImageRow, BreedRow, SyncMetadataRow } from '../../types/database';
 import { deriveSizeBand } from '../../utils/sizeBand';
+import type { SQLiteDatabase } from 'expo-sqlite';
 import { matchesCoatFilter } from '../../utils/coatNormalizer';
 import { logger } from '../../utils/logger';
 
+type TransactionParam = Parameters<
+  Parameters<SQLiteDatabase['withExclusiveTransactionAsync']>[0]
+>[0];
+
 export class BreedRepository {
   constructor(private client: DatabaseClient = databaseClient) {}
+
+  private async executeWithWriteLock<T>(action: () => Promise<T>): Promise<T> {
+    if (
+      typeof (this.client as unknown as { withWriteLock?: (fn: () => Promise<T>) => Promise<T> })
+        .withWriteLock === 'function'
+    ) {
+      return (
+        this.client as unknown as { withWriteLock: (fn: () => Promise<T>) => Promise<T> }
+      ).withWriteLock(action);
+    }
+    return action();
+  }
+
+  private async runTransactionWithRetry<T>(
+    db: {
+      withExclusiveTransactionAsync: (
+        fn: (txn: TransactionParam) => Promise<void>,
+      ) => Promise<void>;
+    },
+    action: (txn: TransactionParam) => Promise<T>,
+  ): Promise<T> {
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        let result: T;
+        await db.withExclusiveTransactionAsync(async (txn) => {
+          if (typeof txn?.execAsync === 'function') {
+            try {
+              await txn.execAsync('PRAGMA busy_timeout = 5000;');
+            } catch {
+              // Ignore if pragma is not supported on mock
+            }
+          }
+          result = await action(txn);
+        });
+        return result!;
+      } catch (err) {
+        const isLocked =
+          err instanceof Error &&
+          (err.message.includes('database is locked') || err.message.includes('busy'));
+        if (isLocked && attempt < maxRetries) {
+          logger.warn(
+            `[BreedRepository] Database locked during transaction (attempt ${attempt}/${maxRetries}), retrying in ${attempt * 150}ms...`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, attempt * 150));
+        } else {
+          throw err;
+        }
+      }
+    }
+    throw new Error('Transaction failed after retries');
+  }
 
   public async getGroups(): Promise<BreedGroup[]> {
     const db = await this.client.getDatabase();
@@ -34,50 +91,53 @@ export class BreedRepository {
 
   public async upsertGroups(groups: GroupDto[]): Promise<void> {
     if (groups.length === 0) return;
-    const db = await this.client.getDatabase();
-    const now = Date.now();
+    return this.executeWithWriteLock(async () => {
+      const db = await this.client.getDatabase();
+      const now = Date.now();
 
-    await db.withExclusiveTransactionAsync(async (txn) => {
-      for (const group of groups) {
-        await txn.runAsync(
-          `INSERT INTO breed_groups (id, name, updated_at)
-           VALUES (?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
-             name = excluded.name,
-             updated_at = excluded.updated_at;`,
-          [group.id, group.attributes.name, now],
-        );
-      }
+      await this.runTransactionWithRetry(db, async (txn) => {
+        for (const group of groups) {
+          await txn.runAsync(
+            `INSERT INTO breed_groups (id, name, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               name = excluded.name,
+               updated_at = excluded.updated_at;`,
+            [group.id, group.attributes.name, now],
+          );
+        }
+      });
+      logger.debug(`[BreedRepository] Upserted ${groups.length} groups.`);
     });
-    logger.debug(`[BreedRepository] Upserted ${groups.length} groups.`);
   }
 
   public async upsertBreeds(breedDtos: BreedDto[]): Promise<void> {
     if (breedDtos.length === 0) return;
-    const db = await this.client.getDatabase();
-    const now = Date.now();
+    return this.executeWithWriteLock(async () => {
+      const db = await this.client.getDatabase();
+      const now = Date.now();
 
-    await db.withExclusiveTransactionAsync(async (txn) => {
-      for (const dto of breedDtos) {
-        const attr = dto.attributes;
-        const normalizedName = attr.name.trim().toLowerCase();
-        const groupId = dto.relationships?.group?.data?.id ?? null;
+      await this.runTransactionWithRetry(db, async (txn) => {
+        for (const dto of breedDtos) {
+          const attr = dto.attributes;
+          const normalizedName = attr.name.trim().toLowerCase();
+          const groupId = dto.relationships?.group?.data?.id ?? null;
 
-        const sizeBand = deriveSizeBand(
-          attr.male_weight ?? attr.female_weight,
-          attr.male_height ?? attr.female_height,
-        );
+          const sizeBand = deriveSizeBand(
+            attr.male_weight ?? attr.female_weight,
+            attr.male_height ?? attr.female_height,
+          );
 
-        const traitsJson = attr.traits ? JSON.stringify(attr.traits) : null;
-        const temperamentJson = attr.traits?.temperament
-          ? JSON.stringify(attr.traits.temperament)
-          : null;
-        const otherNamesJson = attr.other_names ? JSON.stringify(attr.other_names) : null;
-        const recognizedByJson = attr.recognized_by ? JSON.stringify(attr.recognized_by) : null;
+          const traitsJson = attr.traits ? JSON.stringify(attr.traits) : null;
+          const temperamentJson = attr.traits?.temperament
+            ? JSON.stringify(attr.traits.temperament)
+            : null;
+          const otherNamesJson = attr.other_names ? JSON.stringify(attr.other_names) : null;
+          const recognizedByJson = attr.recognized_by ? JSON.stringify(attr.recognized_by) : null;
 
-        // Upsert Breed
-        await txn.runAsync(
-          `INSERT INTO breeds (
+          // Upsert Breed
+          await txn.runAsync(
+            `INSERT INTO breeds (
             id, name, normalized_name, description, hypoallergenic, group_id,
             life_min, life_max, male_weight_min, male_weight_max, female_weight_min, female_weight_max,
             male_height_min, male_height_max, female_height_min, female_height_max,
@@ -112,43 +172,43 @@ export class BreedRepository {
             recognized_by_json = excluded.recognized_by_json,
             size_band = excluded.size_band,
             updated_at = excluded.updated_at;`,
-          [
-            dto.id,
-            attr.name,
-            normalizedName,
-            attr.description ?? null,
-            attr.hypoallergenic ? 1 : 0,
-            groupId,
-            attr.life?.min ?? null,
-            attr.life?.max ?? null,
-            attr.male_weight?.min ?? null,
-            attr.male_weight?.max ?? null,
-            attr.female_weight?.min ?? null,
-            attr.female_weight?.max ?? null,
-            attr.male_height?.min ?? null,
-            attr.male_height?.max ?? null,
-            attr.female_height?.min ?? null,
-            attr.female_height?.max ?? null,
-            attr.origin?.era ?? null,
-            attr.origin?.region ?? null,
-            attr.origin?.country ?? null,
-            attr.coat?.type ?? null,
-            attr.coat?.length ?? null,
-            traitsJson,
-            temperamentJson,
-            otherNamesJson,
-            recognizedByJson,
-            sizeBand,
-            now,
-          ],
-        );
+            [
+              dto.id,
+              attr.name,
+              normalizedName,
+              attr.description ?? null,
+              attr.hypoallergenic ? 1 : 0,
+              groupId,
+              attr.life?.min ?? null,
+              attr.life?.max ?? null,
+              attr.male_weight?.min ?? null,
+              attr.male_weight?.max ?? null,
+              attr.female_weight?.min ?? null,
+              attr.female_weight?.max ?? null,
+              attr.male_height?.min ?? null,
+              attr.male_height?.max ?? null,
+              attr.female_height?.min ?? null,
+              attr.female_height?.max ?? null,
+              attr.origin?.era ?? null,
+              attr.origin?.region ?? null,
+              attr.origin?.country ?? null,
+              attr.coat?.type ?? null,
+              attr.coat?.length ?? null,
+              traitsJson,
+              temperamentJson,
+              otherNamesJson,
+              recognizedByJson,
+              sizeBand,
+              now,
+            ],
+          );
 
-        // Upsert images while preserving local_path and file_size if already cached
-        if (attr.images && attr.images.length > 0) {
-          for (let i = 0; i < attr.images.length; i++) {
-            const img = attr.images[i];
-            await txn.runAsync(
-              `INSERT INTO breed_images (
+          // Upsert images while preserving local_path and file_size if already cached
+          if (attr.images && attr.images.length > 0) {
+            for (let i = 0; i < attr.images.length; i++) {
+              const img = attr.images[i];
+              await txn.runAsync(
+                `INSERT INTO breed_images (
                 id, breed_id, display_order, url, thumb_url, medium_url, large_url,
                 author, license, license_url, source, source_url,
                 updated_at
@@ -166,28 +226,28 @@ export class BreedRepository {
                 source = excluded.source,
                 source_url = excluded.source_url,
                 updated_at = excluded.updated_at;`,
-              [
-                img.id,
-                dto.id,
-                i,
-                img.url,
-                img.thumb ?? null,
-                img.medium ?? null,
-                img.large ?? null,
-                img.attribution?.author ?? null,
-                img.attribution?.license ?? null,
-                img.attribution?.license_url ?? null,
-                img.attribution?.source ?? null,
-                img.attribution?.source_url ?? null,
-                now,
-              ],
-            );
+                [
+                  img.id,
+                  dto.id,
+                  i,
+                  img.url,
+                  img.thumb ?? null,
+                  img.medium ?? null,
+                  img.large ?? null,
+                  img.attribution?.author ?? null,
+                  img.attribution?.license ?? null,
+                  img.attribution?.license_url ?? null,
+                  img.attribution?.source ?? null,
+                  img.attribution?.source_url ?? null,
+                  now,
+                ],
+              );
+            }
           }
         }
-      }
+      });
+      logger.debug(`[BreedRepository] Upserted ${breedDtos.length} breeds.`);
     });
-
-    logger.debug(`[BreedRepository] Upserted ${breedDtos.length} breeds.`);
   }
 
   public async getBreedCount(): Promise<number> {
@@ -266,12 +326,14 @@ export class BreedRepository {
         }
       }
 
-      // 2. Hypoallergenic Filter
-      if (filters.hypoallergenic === 'yes' && row.hypoallergenic !== 1) {
-        continue;
-      }
-      if (filters.hypoallergenic === 'no' && row.hypoallergenic !== 0) {
-        continue;
+      // 2. Hypoallergenic Filter (multi-select: 'yes' and/or 'no')
+      if (filters.hypoallergenic.length === 1) {
+        if (filters.hypoallergenic.includes('yes') && row.hypoallergenic !== 1) {
+          continue;
+        }
+        if (filters.hypoallergenic.includes('no') && row.hypoallergenic !== 0) {
+          continue;
+        }
       }
 
       // 3. Size Band Filter
@@ -530,46 +592,48 @@ export class BreedRepository {
   }
 
   public async updateSyncMetadata(update: Partial<SyncMetadata>): Promise<void> {
-    const db = await this.client.getDatabase();
-    const current = await this.getSyncMetadata();
+    return this.executeWithWriteLock(async () => {
+      const db = await this.client.getDatabase();
+      const current = await this.getSyncMetadata();
 
-    const lastAttemptedAt =
-      update.lastAttemptedAt !== undefined
-        ? update.lastAttemptedAt
-        : (current.lastAttemptedAt ?? null);
-    const lastSuccessfulAt =
-      update.lastSuccessfulAt !== undefined
-        ? update.lastSuccessfulAt
-        : (current.lastSuccessfulAt ?? null);
-    const syncStatus = update.syncStatus !== undefined ? update.syncStatus : current.syncStatus;
-    const expectedRecords =
-      update.expectedRecords !== undefined
-        ? update.expectedRecords
-        : (current.expectedRecords ?? null);
-    const persistedRecords =
-      update.persistedRecords !== undefined ? update.persistedRecords : current.persistedRecords;
-    const errorMessage =
-      update.errorMessage !== undefined ? update.errorMessage : (current.errorMessage ?? null);
+      const lastAttemptedAt =
+        update.lastAttemptedAt !== undefined
+          ? update.lastAttemptedAt
+          : (current.lastAttemptedAt ?? null);
+      const lastSuccessfulAt =
+        update.lastSuccessfulAt !== undefined
+          ? update.lastSuccessfulAt
+          : (current.lastSuccessfulAt ?? null);
+      const syncStatus = update.syncStatus !== undefined ? update.syncStatus : current.syncStatus;
+      const expectedRecords =
+        update.expectedRecords !== undefined
+          ? update.expectedRecords
+          : (current.expectedRecords ?? null);
+      const persistedRecords =
+        update.persistedRecords !== undefined ? update.persistedRecords : current.persistedRecords;
+      const errorMessage =
+        update.errorMessage !== undefined ? update.errorMessage : (current.errorMessage ?? null);
 
-    await db.runAsync(
-      `INSERT INTO sync_metadata (id, last_attempted_at, last_successful_at, sync_status, expected_records, persisted_records, error_message)
-       VALUES (1, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         last_attempted_at = excluded.last_attempted_at,
-         last_successful_at = excluded.last_successful_at,
-         sync_status = excluded.sync_status,
-         expected_records = excluded.expected_records,
-         persisted_records = excluded.persisted_records,
-         error_message = excluded.error_message;`,
-      [
-        lastAttemptedAt,
-        lastSuccessfulAt,
-        syncStatus,
-        expectedRecords,
-        persistedRecords,
-        errorMessage,
-      ],
-    );
+      await db.runAsync(
+        `INSERT INTO sync_metadata (id, last_attempted_at, last_successful_at, sync_status, expected_records, persisted_records, error_message)
+         VALUES (1, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           last_attempted_at = excluded.last_attempted_at,
+           last_successful_at = excluded.last_successful_at,
+           sync_status = excluded.sync_status,
+           expected_records = excluded.expected_records,
+           persisted_records = excluded.persisted_records,
+           error_message = excluded.error_message;`,
+        [
+          lastAttemptedAt,
+          lastSuccessfulAt,
+          syncStatus,
+          expectedRecords,
+          persistedRecords,
+          errorMessage,
+        ],
+      );
+    });
   }
 }
 

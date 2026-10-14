@@ -101,24 +101,32 @@ We partition queries into two distinct models:
 
 ### Context
 
-The Dog API v2 provides male and female weight ranges in kilograms (`male_weight.min`, `male_weight.max`, `female_weight.min`, `female_weight.max`) but does not categorize breeds into human-friendly size bands. Users naturally search by size ("Toy", "Small", "Medium", "Large", "Giant").
+The Dog API v2 provides male and female weight ranges in kilograms (`male_weight.min`, `male_weight.max`, `female_weight.min`, `female_weight.max`) and height ranges in centimeters (`male_height`, `female_height`), but does not categorize breeds into human-friendly size bands. Users search by standardized size categories ("Small", "Medium", "Large", "Giant").
 
 ### Decision
 
-We compute and persist a deterministic `size_band` column upon ingesting each breed, based on the midpoint of available adult weights (averaging male and female maximums or midpoints):
+We compute and persist a deterministic `size_band` column upon ingesting each breed in `src/utils/sizeBand.ts`:
 
-- **Toy:** $< 5.0\text{ kg}$ ($< 11\text{ lbs}$)
-- **Small:** $5.0\text{ kg} \le \text{weight} < 12.0\text{ kg}$ ($11 - 26\text{ lbs}$)
-- **Medium:** $12.0\text{ kg} \le \text{weight} < 25.0\text{ kg}$ ($26 - 55\text{ lbs}$)
-- **Large:** $25.0\text{ kg} \le \text{weight} < 45.0\text{ kg}$ ($55 - 99\text{ lbs}$)
-- **Giant:** $\ge 45.0\text{ kg}$ ($\ge 99\text{ lbs}$)
-- Breeds with unrecorded weight data fall back to `'medium'`.
+1. **Weight Thresholds (primary, in kilograms):**
+   - **Small:** $\text{average weight} \le 10.0\text{ kg}$
+   - **Medium:** $10.0\text{ kg} < \text{average weight} \le 25.0\text{ kg}$
+   - **Large:** $25.0\text{ kg} < \text{average weight} \le 45.0\text{ kg}$
+   - **Giant:** $\text{average weight} > 45.0\text{ kg}$
+
+2. **Height Fallback Thresholds (when weight is absent, in centimeters):**
+   - **Small:** $\text{average height} \le 35.0\text{ cm}$
+   - **Medium:** $35.0\text{ cm} < \text{average height} \le 55.0\text{ cm}$
+   - **Large:** $55.0\text{ cm} < \text{average height} \le 70.0\text{ cm}$
+   - **Giant:** $\text{average height} > 70.0\text{ cm}$
+
+3. **Missing Data Fallback:**
+   - When both weight and height information are missing from the API payload, the breed is honestly classified as `'unknown'`.
 
 ### Consequences
 
 - **Positive:**
   - Persisted in SQLite with a dedicated index (`idx_breeds_size_band`) for zero-cost filtering.
-  - Reusable utility function `calculateSizeBand()` verified with comprehensive unit tests.
+  - Reusable utility function `deriveSizeBand()` verified with unit tests covering boundary thresholds and height fallbacks.
 
 ---
 
@@ -135,23 +143,29 @@ For wire-coated breeds (such as the Wirehaired Pointing Griffon or Wire Fox Terr
 
 ### Decision
 
-We implement a dual-mapping normalizer in `coatNormalizer.ts`:
+We implement a dual-mapping normalizer in `src/utils/coatNormalizer.ts`:
 
 ```ts
-export function normalizeCoat(rawType?: string | null, rawLength?: string | null): NormalizedCoat {
-  const isWire =
-    rawType?.toLowerCase().includes('wire') || rawLength?.toLowerCase().includes('wire');
-  if (isWire) {
-    return { coatType: 'wire', coatLength: 'wire' };
+export function normalizeCoatCategory(
+  coatType?: string | null,
+  coatLength?: string | null,
+): CoatLength | 'other' {
+  const normType = coatType?.trim().toLowerCase();
+  const normLength = coatLength?.trim().toLowerCase();
+
+  if (normType === 'wire' || normLength === 'wire') {
+    return 'wire';
   }
-  return {
-    coatType: rawType?.toLowerCase() || 'unknown',
-    coatLength: rawLength?.toLowerCase() || 'unknown',
-  };
+
+  if (normLength === 'short') return 'short';
+  if (normLength === 'medium') return 'medium';
+  if (normLength === 'long') return 'long';
+
+  return 'other';
 }
 ```
 
-When a user selects "Wire" in the filter chips or filter screen, the SQL query checks `coat_type = 'wire' OR coat_length = 'wire'`.
+When filtering by coat length/type, `matchesCoatFilter` ensures that if 'wire' is selected, breeds with either `coat.type === 'wire'` or `coat.length === 'wire'` match, while standard length filters check `coat.length`.
 
 ### Consequences
 

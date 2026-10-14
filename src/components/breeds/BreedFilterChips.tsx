@@ -24,7 +24,7 @@ export const BreedFilterChips: React.FC<Props> = ({ groups, onOpenFilterModal })
   const toggleGroupId = useFilterStore((s) => s.toggleGroupId);
   const toggleSizeBand = useFilterStore((s) => s.toggleSizeBand);
   const toggleCoatLength = useFilterStore((s) => s.toggleCoatLength);
-  const setHypoallergenic = useFilterStore((s) => s.setHypoallergenic);
+  const toggleHypoallergenic = useFilterStore((s) => s.toggleHypoallergenic);
   const setMinChildrenScore = useFilterStore((s) => s.setMinChildrenScore);
   const setMinDogsScore = useFilterStore((s) => s.setMinDogsScore);
   const setMinStrangersScore = useFilterStore((s) => s.setMinStrangersScore);
@@ -80,22 +80,21 @@ export const BreedFilterChips: React.FC<Props> = ({ groups, onOpenFilterModal })
           </TouchableOpacity>
         )}
 
-        {/* Hypoallergenic Chip */}
-        {hypoallergenic !== 'all' && (
+        {/* Hypoallergenic Chips */}
+        {hypoallergenic.map((opt) => (
           <TouchableOpacity
+            key={`hypo-${opt}`}
             style={[
               styles.chip,
               { backgroundColor: colors.primaryLight, borderColor: colors.primary },
             ]}
-            onPress={() => setHypoallergenic('all')}
+            onPress={() => toggleHypoallergenic(opt)}
             accessibilityRole="button"
-            accessibilityLabel={`Remove hypoallergenic ${hypoallergenic} filter`}
+            accessibilityLabel={`Remove hypoallergenic ${opt} filter`}
           >
-            <Text style={[styles.chipText, { color: colors.primary }]}>
-              Hypo: {hypoallergenic} ✕
-            </Text>
+            <Text style={[styles.chipText, { color: colors.primary }]}>Hypo: {opt} ✕</Text>
           </TouchableOpacity>
-        )}
+        ))}
 
         {/* Size Band Chips */}
         {sizeBands.map((size) => (

@@ -5,6 +5,7 @@ import { ScaleBar } from '../components/common/ScaleBar';
 import { EmptyState } from '../components/common/EmptyState';
 import { AttributionCard } from '../components/gallery/AttributionCard';
 import { BreedListItemComponent } from '../components/breeds/BreedListItemComponent';
+import { TraitScaleCard } from '../components/traits/TraitScaleCard';
 import { BreedListItem } from '../types/domain';
 
 describe('UI Components', () => {
@@ -37,6 +38,54 @@ describe('UI Components', () => {
     it('renders custom units such as min/day for exercise', async () => {
       await render(<ScaleBar label="Daily Exercise" value={45} maxScore={120} unit="min/day" />);
       expect(screen.getByText('45 min/day')).toBeTruthy();
+    });
+
+    it('renders score of 0 correctly without treating it as missing', async () => {
+      await render(
+        <ScaleBar label="Barking Frequency" value={0} maxScore={5} interpretation="Quiet" />,
+      );
+      expect(screen.getByText('0 / 5')).toBeTruthy();
+      expect(screen.getByText(' (Quiet)')).toBeTruthy();
+      expect(screen.queryByText('Not provided')).toBeNull();
+    });
+  });
+
+  describe('TraitScaleCard', () => {
+    it('renders all 11 traits and interpretations', async () => {
+      const traits = {
+        energy: 5,
+        barking: 1,
+        drooling: 1,
+        grooming: 2,
+        shedding: 3,
+        trainability: 5,
+        goodWithDogs: 4,
+        exerciseMinutes: 60,
+        apartmentFriendly: 4,
+        goodWithChildren: 5,
+        goodWithStrangers: 4,
+      };
+
+      await render(<TraitScaleCard traits={traits} />);
+
+      expect(screen.getByText('Energy Level')).toBeTruthy();
+      expect(screen.getByText('Barking Frequency')).toBeTruthy();
+      expect(screen.getByText('Drooling Amount')).toBeTruthy();
+      expect(screen.getByText('Grooming Needs')).toBeTruthy();
+      expect(screen.getByText('Shedding Level')).toBeTruthy();
+      expect(screen.getByText('Trainability')).toBeTruthy();
+      expect(screen.getByText('Good with Other Dogs')).toBeTruthy();
+      expect(screen.getByText('Daily Exercise')).toBeTruthy();
+      expect(screen.getByText('Apartment Friendly')).toBeTruthy();
+      expect(screen.getByText('Good with Children')).toBeTruthy();
+      expect(screen.getByText('Good with Strangers')).toBeTruthy();
+      expect(screen.getByText('60 min/day')).toBeTruthy();
+    });
+
+    it('renders gracefully when traits are undefined or partially missing', async () => {
+      await render(<TraitScaleCard traits={undefined} />);
+      expect(screen.getByText('Behavioral & Physical Traits')).toBeTruthy();
+      expect(screen.getAllByText('Not provided').length).toBe(11);
     });
   });
 

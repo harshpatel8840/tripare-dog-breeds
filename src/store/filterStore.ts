@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { BreedFilters, HypoallergenicFilter, INITIAL_FILTERS } from '../types/filters';
+import { BreedFilters, HypoallergenicOption, INITIAL_FILTERS } from '../types/filters';
 import { CoatLength, SizeBand } from '../types/domain';
 
 interface FilterState extends BreedFilters {
@@ -7,7 +7,8 @@ interface FilterState extends BreedFilters {
   toggleGroupId: (groupId: string) => void;
   toggleSizeBand: (sizeBand: SizeBand) => void;
   toggleCoatLength: (coatLength: CoatLength) => void;
-  setHypoallergenic: (filter: HypoallergenicFilter) => void;
+  toggleHypoallergenic: (option: HypoallergenicOption) => void;
+  setHypoallergenic: (options: HypoallergenicOption[]) => void;
   setMinChildrenScore: (score: number | null) => void;
   setMinDogsScore: (score: number | null) => void;
   setMinStrangersScore: (score: number | null) => void;
@@ -51,6 +52,16 @@ export const useFilterStore = create<FilterState>((set, get) => ({
       };
     }),
 
+  toggleHypoallergenic: (option) =>
+    set((state) => {
+      const exists = state.hypoallergenic.includes(option);
+      return {
+        hypoallergenic: exists
+          ? state.hypoallergenic.filter((o) => o !== option)
+          : [...state.hypoallergenic, option],
+      };
+    }),
+
   setHypoallergenic: (hypoallergenic) => set({ hypoallergenic }),
 
   setMinChildrenScore: (score) => set({ minChildrenScore: score }),
@@ -64,7 +75,7 @@ export const useFilterStore = create<FilterState>((set, get) => ({
       groupIds: [],
       sizeBands: [],
       coatLengths: [],
-      hypoallergenic: 'all',
+      hypoallergenic: [],
       minChildrenScore: null,
       minDogsScore: null,
       minStrangersScore: null,
@@ -77,7 +88,7 @@ export const useFilterStore = create<FilterState>((set, get) => ({
       s.groupIds.length > 0 ||
       s.sizeBands.length > 0 ||
       s.coatLengths.length > 0 ||
-      s.hypoallergenic !== 'all' ||
+      s.hypoallergenic.length > 0 ||
       s.minChildrenScore !== null ||
       s.minDogsScore !== null ||
       s.minStrangersScore !== null
@@ -90,7 +101,7 @@ export const useFilterStore = create<FilterState>((set, get) => ({
     count += s.groupIds.length;
     count += s.sizeBands.length;
     count += s.coatLengths.length;
-    if (s.hypoallergenic !== 'all') count += 1;
+    count += s.hypoallergenic.length;
     if (s.minChildrenScore !== null) count += 1;
     if (s.minDogsScore !== null) count += 1;
     if (s.minStrangersScore !== null) count += 1;

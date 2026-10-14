@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useFilterStore } from '../store/filterStore';
 import { useBreeds } from '../hooks/useBreeds';
@@ -25,7 +26,7 @@ export const FilterScreen: React.FC = () => {
   const toggleGroupId = useFilterStore((s) => s.toggleGroupId);
   const toggleSizeBand = useFilterStore((s) => s.toggleSizeBand);
   const toggleCoatLength = useFilterStore((s) => s.toggleCoatLength);
-  const setHypoallergenic = useFilterStore((s) => s.setHypoallergenic);
+  const toggleHypoallergenic = useFilterStore((s) => s.toggleHypoallergenic);
   const setMinChildrenScore = useFilterStore((s) => s.setMinChildrenScore);
   const setMinDogsScore = useFilterStore((s) => s.setMinDogsScore);
   const setMinStrangersScore = useFilterStore((s) => s.setMinStrangersScore);
@@ -106,8 +107,8 @@ export const FilterScreen: React.FC = () => {
               <MultiSelectPill
                 key={opt.id}
                 label={opt.label}
-                isSelected={hypoallergenic === opt.id}
-                onPress={() => setHypoallergenic(opt.id)}
+                isSelected={hypoallergenic.includes(opt.id)}
+                onPress={() => toggleHypoallergenic(opt.id)}
               />
             ))}
           </View>

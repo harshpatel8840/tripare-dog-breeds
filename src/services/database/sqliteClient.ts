@@ -6,16 +6,64 @@ const DB_NAME = 'dog_breeds.db';
 export class DatabaseClient {
   private db: SQLite.SQLiteDatabase | null = null;
   private isInitialized = false;
+  private initPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+  private writeQueue: Promise<void> = Promise.resolve();
+  private pendingWrites = 0;
 
   public async getDatabase(): Promise<SQLite.SQLiteDatabase> {
-    if (!this.db) {
-      this.db = await SQLite.openDatabaseAsync(DB_NAME);
+    if (this.db && this.isInitialized) {
+      return this.db;
     }
-    if (!this.isInitialized) {
-      await this.initializeSchema(this.db);
-      this.isInitialized = true;
+    if (this.initPromise) {
+      return this.initPromise;
     }
-    return this.db;
+
+    this.initPromise = (async () => {
+      try {
+        if (!this.db) {
+          this.db = await SQLite.openDatabaseAsync(DB_NAME);
+        }
+        if (!this.isInitialized) {
+          await this.initializeSchema(this.db);
+          this.isInitialized = true;
+        }
+        return this.db;
+      } finally {
+        this.initPromise = null;
+      }
+    })();
+
+    return this.initPromise;
+  }
+
+  /**
+   * Serializes write operations to prevent concurrent write lock contention.
+   */
+  public async withWriteLock<T>(action: () => Promise<T>): Promise<T> {
+    this.pendingWrites++;
+    let release: () => void;
+    const waitPromise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const currentQueue = this.writeQueue;
+    this.writeQueue = this.writeQueue.then(
+      () => waitPromise,
+      () => waitPromise,
+    );
+    try {
+      await currentQueue;
+    } catch {
+      // Continue even if previous write operation failed
+    }
+    try {
+      return await action();
+    } finally {
+      this.pendingWrites--;
+      if (this.pendingWrites === 0) {
+        this.writeQueue = Promise.resolve();
+      }
+      release!();
+    }
   }
 
   /**
@@ -39,9 +87,13 @@ export class DatabaseClient {
   private async initializeSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     logger.info('[DatabaseClient] Initializing database schema...');
 
-    await db.execAsync(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA foreign_keys = ON;
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await db.execAsync(`
+          PRAGMA busy_timeout = 5000;
+          PRAGMA journal_mode = WAL;
+          PRAGMA foreign_keys = ON;
 
       CREATE TABLE IF NOT EXISTS breed_groups (
         id TEXT PRIMARY KEY NOT NULL,
@@ -108,6 +160,20 @@ export class DatabaseClient {
       CREATE INDEX IF NOT EXISTS idx_breed_images_breed_id ON breed_images(breed_id);
       CREATE INDEX IF NOT EXISTS idx_breed_images_last_accessed ON breed_images(last_accessed_at);
       CREATE INDEX IF NOT EXISTS idx_breed_images_local_path ON breed_images(local_path);
+
+      CREATE TABLE IF NOT EXISTS image_cache_entries (
+        cache_key TEXT PRIMARY KEY NOT NULL,
+        image_id TEXT NOT NULL,
+        variant TEXT NOT NULL,
+        url TEXT NOT NULL,
+        local_path TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        last_accessed_at INTEGER NOT NULL,
+        FOREIGN KEY (image_id) REFERENCES breed_images(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_image_cache_access ON image_cache_entries(last_accessed_at);
+      CREATE INDEX IF NOT EXISTS idx_image_cache_image_id ON image_cache_entries(image_id);
 
       CREATE TABLE IF NOT EXISTS sync_metadata (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -123,11 +189,27 @@ export class DatabaseClient {
       VALUES (1, 'idle', 0);
     `);
 
-    logger.info('[DatabaseClient] Database schema initialized successfully.');
+        logger.info('[DatabaseClient] Database schema initialized successfully.');
+        return;
+      } catch (err: unknown) {
+        const isLocked =
+          err instanceof Error &&
+          (err.message.includes('database is locked') || err.message.includes('busy'));
+        if (isLocked && attempt < maxRetries) {
+          logger.warn(
+            `[DatabaseClient] Database locked during init (attempt ${attempt}/${maxRetries}), retrying in ${attempt * 200}ms...`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, attempt * 200));
+        } else {
+          throw err;
+        }
+      }
+    }
   }
 
   private initializeSchemaSync(db: SQLite.SQLiteDatabase): void {
     db.execSync(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
 
@@ -196,6 +278,20 @@ export class DatabaseClient {
       CREATE INDEX IF NOT EXISTS idx_breed_images_breed_id ON breed_images(breed_id);
       CREATE INDEX IF NOT EXISTS idx_breed_images_last_accessed ON breed_images(last_accessed_at);
       CREATE INDEX IF NOT EXISTS idx_breed_images_local_path ON breed_images(local_path);
+
+      CREATE TABLE IF NOT EXISTS image_cache_entries (
+        cache_key TEXT PRIMARY KEY NOT NULL,
+        image_id TEXT NOT NULL,
+        variant TEXT NOT NULL,
+        url TEXT NOT NULL,
+        local_path TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        last_accessed_at INTEGER NOT NULL,
+        FOREIGN KEY (image_id) REFERENCES breed_images(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_image_cache_sync_access ON image_cache_entries(last_accessed_at);
+      CREATE INDEX IF NOT EXISTS idx_image_cache_sync_image_id ON image_cache_entries(image_id);
 
       CREATE TABLE IF NOT EXISTS sync_metadata (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -213,4 +309,12 @@ export class DatabaseClient {
   }
 }
 
-export const databaseClient = new DatabaseClient();
+declare global {
+  var __tripare_db_client__: DatabaseClient | undefined;
+}
+
+export const databaseClient = globalThis.__tripare_db_client__ ?? new DatabaseClient();
+
+if (process.env.NODE_ENV !== 'production') {
+  globalThis.__tripare_db_client__ = databaseClient;
+}

@@ -280,6 +280,53 @@ describe('BreedRepository', () => {
     expect(matchingItems[0].name).toBe('Affenpinscher');
   });
 
+  it('filters breeds by multi-select hypoallergenic options', async () => {
+    const hypoBreed: BreedDto = {
+      id: 'b-hypo',
+      type: 'breed',
+      attributes: {
+        name: 'Poodle',
+        hypoallergenic: true,
+      },
+    };
+    const nonHypoBreed: BreedDto = {
+      id: 'b-non-hypo',
+      type: 'breed',
+      attributes: {
+        name: 'German Shepherd',
+        hypoallergenic: false,
+      },
+    };
+
+    await repo.upsertBreeds([hypoBreed, nonHypoBreed]);
+
+    // Select 'yes'
+    const yesSections = await repo.getBreedSections({
+      ...INITIAL_FILTERS,
+      hypoallergenic: ['yes'],
+    });
+    const yesItems = yesSections.flatMap((s) => s.data);
+    expect(yesItems.length).toBe(1);
+    expect(yesItems[0].name).toBe('Poodle');
+
+    // Select 'no'
+    const noSections = await repo.getBreedSections({
+      ...INITIAL_FILTERS,
+      hypoallergenic: ['no'],
+    });
+    const noItems = noSections.flatMap((s) => s.data);
+    expect(noItems.length).toBe(1);
+    expect(noItems[0].name).toBe('German Shepherd');
+
+    // Multi-select both 'yes' and 'no' -> both match
+    const bothSections = await repo.getBreedSections({
+      ...INITIAL_FILTERS,
+      hypoallergenic: ['yes', 'no'],
+    });
+    const bothItems = bothSections.flatMap((s) => s.data);
+    expect(bothItems.length).toBe(2);
+  });
+
   it('filters breeds by multi-select size and coat wire mapping', async () => {
     const smallWireBreed: BreedDto = {
       id: 'b-1',
